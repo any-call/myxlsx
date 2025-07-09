@@ -5,11 +5,12 @@ import (
 	"github.com/xuri/excelize/v2"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // ExportToXLSX 导出结构体切片为 XLSX 文件
-func ExportToXLSX[T any](list []T, sheetName string, filepath string) error {
+func ExportToXLSX[T any](list []T, filepath, sheetName string) error {
 	if len(list) == 0 {
 		return fmt.Errorf("empty data list")
 	}
@@ -55,6 +56,72 @@ func ExportToXLSX[T any](list []T, sheetName string, filepath string) error {
 	}
 
 	f.SetActiveSheet(index)
+	return f.SaveAs(filepath)
+}
+
+// ExportToXLSX 导出结构体切片为 XLSX 文件
+func ExportToXLSXEx[T any](list []T, filepath, sheetName string,
+	getHeader func(fieldPath string) string,
+	getCellValue func(item T, fieldPath string) string) error {
+	if len(list) == 0 {
+		return fmt.Errorf("empty data list")
+	}
+
+	// 反射提取字段路径
+	var sample T
+	fieldPaths := extractFields(reflect.TypeOf(sample), "")
+
+	// 确定导出的字段（根据 getHeader）
+	var headers []string
+	var exportFields []string
+
+	for _, path := range fieldPaths {
+		if getHeader != nil {
+			title := getHeader(path)
+			if title == "" {
+				continue // 忽略字段
+			}
+			headers = append(headers, title)
+			exportFields = append(exportFields, path)
+		} else {
+			headers = append(headers, path)
+			exportFields = append(exportFields, path)
+		}
+	}
+
+	f := excelize.NewFile()
+	index, err := f.NewSheet(sheetName)
+	if err != nil {
+		return err
+	}
+	f.SetActiveSheet(index)
+
+	// 写入 header
+	for i, title := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheetName, cell, title)
+	}
+
+	// 写入数据行
+	for rowIndex, item := range list {
+		v := reflect.ValueOf(item)
+
+		for colIndex, fieldPath := range exportFields {
+			var val string
+			// 优先走回调
+			if getCellValue != nil {
+				val = getCellValue(item, fieldPath)
+			} else {
+				// 默认反射值
+				raw := getValueByPath(v, fieldPath)
+				val = fmt.Sprintf("%v", raw)
+			}
+
+			cell, _ := excelize.CoordinatesToCellName(colIndex+1, rowIndex+2)
+			f.SetCellValue(sheetName, cell, val)
+		}
+	}
+	// 保存文件
 	return f.SaveAs(filepath)
 }
 
@@ -132,4 +199,55 @@ func ImportFromXLSX[T any](filepath string, sheetName string) ([]T, error) {
 	}
 
 	return result, nil
+}
+
+// 递归展开字段路径
+func extractFields(t reflect.Type, prefix string) []string {
+	var fields []string
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		// 忽略未导出字段
+		if !field.IsExported() {
+			continue
+		}
+
+		// 当前字段路径
+		fieldPath := field.Name
+		if prefix != "" {
+			fieldPath = prefix + "." + field.Name
+		}
+
+		ft := field.Type
+		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" {
+			// 是用户自定义结构体，递归展开
+			subFields := extractFields(ft, fieldPath)
+			fields = append(fields, subFields...)
+		} else {
+			fields = append(fields, fieldPath)
+		}
+	}
+
+	return fields
+}
+
+// 根据字段路径获取结构体中的值（支持嵌套）
+func getValueByPath(v reflect.Value, fieldPath string) any {
+	fields := strings.Split(fieldPath, ".")
+
+	for _, name := range fields {
+		if v.Kind() == reflect.Pointer {
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			return nil
+		}
+		v = v.FieldByName(name)
+	}
+
+	if v.IsValid() && v.CanInterface() {
+		return v.Interface()
+	}
+	return nil
 }
