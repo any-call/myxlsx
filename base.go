@@ -4,9 +4,19 @@ import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+)
+
+type (
+	headerInfo struct {
+		Path     string
+		Title    string
+		Order    int
+		MaxWidth float64
+	}
 )
 
 // ExportToXLSX 导出结构体切片为 XLSX 文件
@@ -60,67 +70,99 @@ func ExportToXLSX[T any](list []T, filepath, sheetName string) error {
 }
 
 func ExportXLSXWithOptions[T any](list []T, filepath, sheetName string,
-	getHeader func(fieldPath string) string,
+	getHeader func(fieldPath string) (string, int),
 	getCellValue func(item T, fieldPath string) string) error {
 	if len(list) == 0 {
-		return fmt.Errorf("empty data list")
+		return fmt.Errorf("data is empty")
 	}
 
-	// 反射提取字段路径
 	var sample T
 	fieldPaths := extractFields(reflect.TypeOf(sample), "")
 
-	// 确定导出的字段（根据 getHeader）
-	var headers []string
-	var exportFields []string
-
+	var headers []headerInfo
 	for _, path := range fieldPaths {
+		title := path
+		order := 9999
+
 		if getHeader != nil {
-			title := getHeader(path)
-			if title == "" {
-				continue // 忽略字段
+			t, o := getHeader(path)
+			if t == "" {
+				continue
 			}
-			headers = append(headers, title)
-			exportFields = append(exportFields, path)
-		} else {
-			headers = append(headers, path)
-			exportFields = append(exportFields, path)
+			title = t
+			order = o
 		}
+
+		headers = append(headers, headerInfo{
+			Path:     path,
+			Title:    title,
+			Order:    order,
+			MaxWidth: float64(len(title)) + 2, // 初始列宽
+		})
 	}
 
+	sort.Slice(headers, func(i, j int) bool {
+		return headers[i].Order < headers[j].Order
+	})
+
 	f := excelize.NewFile()
-	index, err := f.NewSheet(sheetName)
+	sheetIdx, err := f.NewSheet(sheetName)
 	if err != nil {
 		return err
 	}
-	f.SetActiveSheet(index)
+	f.SetActiveSheet(sheetIdx)
 
-	// 写入 header
-	for i, title := range headers {
+	// 写 header
+	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheetName, cell, title)
+		_ = f.SetCellValue(sheetName, cell, h.Title)
 	}
 
-	// 写入数据行
-	for rowIndex, item := range list {
+	// 写内容
+	for rowIdx, item := range list {
 		v := reflect.ValueOf(item)
 
-		for colIndex, fieldPath := range exportFields {
-			var val string
-			// 优先走回调
+		for colIdx, h := range headers {
+			val := ""
+
 			if getCellValue != nil {
-				val = getCellValue(item, fieldPath)
-			} else {
-				// 默认反射值
-				raw := getValueByPath(v, fieldPath)
+				val = getCellValue(item, h.Path)
+			}
+
+			if val == "" {
+				raw := getValueByPath(v, h.Path)
 				val = fmt.Sprintf("%v", raw)
 			}
 
-			cell, _ := excelize.CoordinatesToCellName(colIndex+1, rowIndex+2)
-			f.SetCellValue(sheetName, cell, val)
+			// 更新最大列宽
+			l := len(val)
+			if float64(l) > headers[colIdx].MaxWidth {
+				headers[colIdx].MaxWidth = float64(l) + 2
+			}
+
+			cell, _ := excelize.CoordinatesToCellName(colIdx+1, rowIdx+2)
+			_ = f.SetCellValue(sheetName, cell, val)
+
+			// 自动换行设置
+			if strings.Contains(val, "\n") || strings.Contains(val, "\r") {
+				style, _ := f.NewStyle(&excelize.Style{
+					Alignment: &excelize.Alignment{WrapText: true},
+				})
+				_ = f.SetCellStyle(sheetName, cell, cell, style)
+			}
 		}
 	}
-	// 保存文件
+
+	// 设置列宽
+	for i, h := range headers {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		w := h.MaxWidth
+		if w > 80 {
+			w = 80
+		}
+		_ = f.SetColWidth(sheetName, col, col, w)
+	}
+
 	return f.SaveAs(filepath)
 }
 
