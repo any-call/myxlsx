@@ -53,7 +53,7 @@ func TestExportToXLSX1(t *testing.T) {
 		{ID: 2, Name: "Tom", Email: "tom@example.com", Time: time.Now()},
 	}
 
-	if err := ExportToXLSXEx(data, "/Users/luisjin/Desktop/用户表1.xlsx",
+	if err := ExportXLSXWithOptions(data, "/Users/luisjin/Desktop/用户表1.xlsx",
 		"Sheet1",
 		func(fieldPath string) string {
 			fmt.Println("fieldPath is :", fieldPath)

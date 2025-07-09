@@ -59,8 +59,7 @@ func ExportToXLSX[T any](list []T, filepath, sheetName string) error {
 	return f.SaveAs(filepath)
 }
 
-// ExportToXLSX 导出结构体切片为 XLSX 文件
-func ExportToXLSXEx[T any](list []T, filepath, sheetName string,
+func ExportXLSXWithOptions[T any](list []T, filepath, sheetName string,
 	getHeader func(fieldPath string) string,
 	getCellValue func(item T, fieldPath string) string) error {
 	if len(list) == 0 {
